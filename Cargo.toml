@@ -1,0 +1,14 @@
+[package]
+name = "li_logger"
+version = "0.1.0"
+description = "A self-use super-simple logging library."
+edition = "2024"
+authors = ["Falsw <Falsestar114514@outlook.com>"]
+repository = "https://github.com/Falsw-star/li_logger"
+license = "MIT"
+
+[dependencies]
+chrono = "0.4.44"
+colored = "3.1.1"
+lazy_static = "1.5.0"
+tokio = { version = "1.49.0", features = ["sync"] }
