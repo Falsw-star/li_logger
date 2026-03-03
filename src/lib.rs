@@ -1,7 +1,7 @@
 use std::{sync::{Arc, Mutex}};
 
 use colored::{Color, Colorize};
-use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::{sync::mpsc::{UnboundedSender, unbounded_channel}, task::JoinHandle};
 
 lazy_static::lazy_static! {
     static ref LOGGER: Arc<Mutex<Option<Logger>>> = Arc::new(Mutex::new(None));
@@ -9,13 +9,25 @@ lazy_static::lazy_static! {
 
 /// The function creates a [`Logger`] and loop until program exits.
 /// It should be used in a new thread.
+/// ### Close
+/// To close the logger thread, just drop all [`Logger`]s and call li_logger::close().
+/// This is easy to do in rust.
 /// ### Example
 /// ```rust
-/// let handle = tokio::spawn(async move {
-///     li_logger::run().await;
-/// });
+/// #[tokio::main]
+/// async fn main() {
+/// 
+///     let handle = li_logger::init();
+///     let mut logger = li_logger::get_logger();
+///     
+///     logger.success("Li Logger Started!");
+///     
+///     drop(logger);
+///     li_logger::close();
+///     handle.await;
+/// }
 /// ```
-pub async fn run() {
+pub fn init() -> JoinHandle<()> {
     let (tx, mut rx) = unbounded_channel();
 
     {
@@ -23,14 +35,20 @@ pub async fn run() {
         LOGGER.lock().unwrap().replace(logger);
     }
 
-    while let Some(message) = rx.recv().await {
-        println!("{}", format_log_message(
-            &message.content,
-            &message.meta.string,
-            message.meta.color,
-            message.strong
-        ));
-    }
+    tokio::spawn(async move {
+        while let Some(message) = rx.recv().await {
+            println!("{}", format_log_message(
+                &message.content,
+                &message.meta.string,
+                message.meta.color,
+                message.strong
+            ));
+        }
+    })
+}
+
+pub fn close() {
+    *LOGGER.lock().unwrap() = None;
 }
 
 fn format_log_message(content: &str, level: &str, color: Color, strong: bool) -> String {
@@ -51,14 +69,14 @@ fn format_log_message(content: &str, level: &str, color: Color, strong: bool) ->
             ));
         } else if i < lines.len() - 1 {
             result.push_str(&format!(
-                "             {} {}",
+                "\n             {} {}",
                 ":".color(Color::BrightBlack),
                 if strong { line.color(color).bold().to_string() }
                 else { line.to_string() }
             ));
         } else {
             result.push_str(&format!(
-                "             : {}",
+                "\n             : {}",
                 if strong { line.color(color).bold().to_string() }
                 else { line.to_string() }
             ));
