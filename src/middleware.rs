@@ -56,7 +56,7 @@ impl<E> EventBus<E> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct Event {
     method: http::Method,
     uri: http::Uri,
