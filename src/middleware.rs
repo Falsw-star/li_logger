@@ -85,6 +85,7 @@ impl Event {
     }
 }
 
+#[derive(Clone)]
 pub struct EventLayer<E> {
     bus: EventBus<E>
 }
@@ -102,6 +103,7 @@ where E: Clone
     }
 }
 
+#[derive(Clone)]
 pub struct EventService<S, E> {
     pub(crate) inner: S,
     pub(crate) bus: EventBus<E>,
