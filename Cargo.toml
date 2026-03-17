@@ -1,14 +1,26 @@
 [package]
 name = "li_logger"
-version = "0.1.1"
+version = "0.1.2"
 description = "A self-use super-simple logging library."
 edition = "2024"
 authors = ["Falsw <Falsestar114514@outlook.com>"]
 repository = "https://github.com/Falsw-star/li_logger"
 license = "MIT"
 
+[features]
+middleware = [
+    "tower",
+    "http",
+    "pin-project",
+    "crossbeam"
+]
+
 [dependencies]
 chrono = "0.4.44"
 colored = "3.1.1"
+crossbeam = { version = "0.8.4", optional = true }
+http = { version = "1.4.0", optional = true }
 lazy_static = "1.5.0"
-tokio = { version = "1.49.0", features = ["sync", "rt"] }
+pin-project = { version = "1.1.11", optional = true }
+tokio = { version = "1.50.0", features = ["sync", "rt"] }
+tower = { version = "0.5.3", optional = true }

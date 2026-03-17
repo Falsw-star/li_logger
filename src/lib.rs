@@ -7,6 +7,9 @@ lazy_static::lazy_static! {
     static ref LOGGER: Arc<Mutex<Option<Logger>>> = Arc::new(Mutex::new(None));
 }
 
+#[cfg(feature = "middleware")]
+pub mod middleware;
+
 /// The function creates a [`Logger`] and loop until program exits.
 /// It should be used in a new thread.
 /// ### Close
