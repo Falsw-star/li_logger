@@ -1,21 +1,48 @@
 use std::{pin::Pin, sync::Arc, task::{Context, Poll}, time::Instant};
 
-use crossbeam::queue::ArrayQueue;
+use crate::EventBus;
 use http::{Request, Response};
 use tokio::task::JoinHandle;
 use tower::{Layer, Service};
 
-use colored::{Color, Colorize};
+use colored::{self, Color, Colorize};
 
-pub fn middleware(cap: usize) -> (JoinHandle<()> ,EventLayer<Event>) {
-    let bus: EventBus<Event> = EventBus::new(cap);
+/// Middleware for logging HTTP requests.  
+/// 
+/// It is started as a independent async task, automatically closing when the application is closed. 
+/// 
+/// Can be used together with [`li_logger::init()`]
+/// # Example
+/// ```rust
+/// use li_logger::{middleware, default_formatter};
+/// use axum::{Json, Router, routing::get};
+/// 
+/// #[tokio::main]
+/// async fn main() {
+/// 
+///     let (handle, ware) = middleware::middleware(100, default_formatter);
+/// 
+///     let app = Router::new()
+///         .route("/", get(|| async { "Hello, World!" }))
+///         .layer(ware);
+///     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await.unwrap();
+///     axum::serve(listener, app)
+///         .with_graceful_shutdown(async move {
+///             tokio::signal::ctrl_c().await.ok();
+///         })
+///         .await.unwrap();
+///     handle.await.unwrap();
+/// }
+/// ```
+pub fn middleware(cap: usize, formatter: fn(&Event) -> String) -> (JoinHandle<()> ,EventLayer<Event>) {
+    let bus = EventBus::<Event>::new(cap);
     let queue = Arc::downgrade(&bus.queue);
     let handle =  tokio::spawn(async move {
         loop {
             match queue.upgrade() {
                 Some(queue) => {
                     if let Some(event) = queue.pop() {
-                        let event = event.format();
+                        let event = formatter(&event);
                         println!("{}", event);
                     } else {
                         tokio::task::yield_now().await
@@ -28,34 +55,6 @@ pub fn middleware(cap: usize) -> (JoinHandle<()> ,EventLayer<Event>) {
     (handle, EventLayer { bus })
 }
 
-pub struct EventBus<E> {
-    queue: Arc<ArrayQueue<E>>
-}
-
-impl<E> Clone for EventBus<E> {
-    fn clone(&self) -> Self {
-        EventBus {
-            queue: self.queue.clone()
-        }
-    }
-}
-
-impl<E> EventBus<E> {
-    pub fn new(cap: usize) -> Self {
-        Self {
-            queue: Arc::new(ArrayQueue::new(cap)),
-        }
-    }
-
-    pub fn push(&self, event: E) {
-        let _ = self.queue.push(event);
-    }
-
-    pub fn queue(&self) -> Arc<ArrayQueue<E>> {
-        self.queue.clone()
-    }
-}
-
 #[derive(Clone)]
 pub struct Event {
     method: http::Method,
@@ -64,25 +63,28 @@ pub struct Event {
     latency: std::time::Duration,
 }
 
-impl Event {
-    pub fn format(&self) -> String {
-        let timestamp = chrono::Local::now().format("%H:%M:%S").to_string()
-            .color(Color::BrightBlack);
-        let color = match self.status.as_u16() {
-            200..=299 => Color::Green,
-            400..=499 => Color::Red,
-            _ => Color::Magenta
-        };
-        format!(
-            "{} {} [{}] {} {}",
-            timestamp,
-            format!("{:5}", self.method).bold(),
-            self.status.as_str().color(color).bold(),
-            self.uri.path(),
-            format!("(in {:.2}s)", self.latency.as_secs_f32())
-                .color(Color::BrightBlack),
-        )
-    }
+/// Default formatter for [`middleware()`]
+/// 
+/// Example: `2026-3-18 21:50:29 [200] GET /api/v1/users in 0.01s`
+/// 
+/// You may customize the formatter by implementing a `fn(event: &Event) -> String` and pass it to [`middleware()`]
+pub fn default_formatter(event: &Event) -> String {
+    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+        .color(Color::BrightBlack);
+    let color = match event.status.as_u16() {
+        200..=299 => Color::Green,
+        400..=499 => Color::Red,
+        _ => Color::Magenta
+    };
+    format!(
+        "{} [{}] {} {} {}",
+        timestamp,
+        event.status.as_str().color(color).bold(),
+        format!("{:>5}", event.method).bold(),
+        event.uri.path(),
+        format!("in {:.2}s", event.latency.as_secs_f32())
+            .color(Color::BrightBlack),
+    )
 }
 
 #[derive(Clone)]

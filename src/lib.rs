@@ -1,60 +1,109 @@
-use std::{sync::{Arc, Mutex}};
+use std::sync::{Arc, Mutex, Weak};
 
-use colored::{Color, Colorize};
-use tokio::{sync::mpsc::{UnboundedSender, unbounded_channel}, task::JoinHandle};
+use colored::{self, Color, Colorize};
+use crossbeam::queue::ArrayQueue;
+use tokio::task::JoinHandle;
 
 lazy_static::lazy_static! {
-    static ref LOGGER: Arc<Mutex<Option<Logger>>> = Arc::new(Mutex::new(None));
+    static ref BUS: Mutex<Option<Arc<EventBus<LogEvent>>>> = Mutex::new(None);
 }
 
 #[cfg(feature = "middleware")]
 pub mod middleware;
 
-/// The function creates a [`Logger`] and loop until program exits.
-/// It should be used in a new thread.
+pub struct EventBus<E> {
+    queue: Arc<ArrayQueue<E>>
+}
+
+impl<E> Clone for EventBus<E> {
+    fn clone(&self) -> Self {
+        EventBus {
+            queue: self.queue.clone()
+        }
+    }
+}
+
+impl<E> EventBus<E> {
+    pub fn new(cap: usize) -> Self {
+        Self {
+            queue: Arc::new(ArrayQueue::new(cap)),
+        }
+    }
+
+    pub fn push(&self, event: E) {
+        let _ = self.queue.push(event);
+    }
+
+    pub fn queue(&self) -> Arc<ArrayQueue<E>> {
+        self.queue.clone()
+    }
+}
+
+/// The function creates a async logging thread. 
+/// 
+/// The [`get_logger`] function will be usable after [`init`] is called.
+/// 
 /// ### Close
-/// To close the logger thread, just drop all [`Logger`]s and call li_logger::close().
-/// This is easy to do in rust.
+/// To close the logger thread, just call [`li_logger::close()`].
+/// 
+/// All [`Logger`] will not be usable after [`close`] is called.
+/// 
 /// ### Example
 /// ```rust
+/// use li_logger::default_formatter;
+/// 
 /// #[tokio::main]
 /// async fn main() {
 /// 
-///     let handle = li_logger::init();
+///     let handle = li_logger::init(100, default_formatter);
 ///     let mut logger = li_logger::get_logger();
 ///     
 ///     logger.success("Li Logger Started!");
 ///     
-///     drop(logger);
 ///     li_logger::close();
 ///     handle.await;
 /// }
 /// ```
-pub fn init() -> JoinHandle<()> {
-    let (tx, mut rx) = unbounded_channel();
+pub fn init(cap: usize, formatter: fn(content: &str, level: &str, color: Color, strong: bool) -> String) -> JoinHandle<()> {
 
-    {
-        let logger = Logger { sender: tx, temporary_strong: false };
-        LOGGER.lock().unwrap().replace(logger);
-    }
+    
+    let bus = EventBus::<LogEvent>::new(cap);
+    let queue = Arc::downgrade(&bus.queue);
+    BUS.lock().unwrap().replace(Arc::new(bus));
 
     tokio::spawn(async move {
-        while let Some(message) = rx.recv().await {
-            println!("{}", format_log_message(
-                &message.content,
-                &message.meta.string,
-                message.meta.color,
-                message.strong
-            ));
+        loop {
+            match queue.upgrade() {
+                Some(queue) => {
+                    if let Some(event) = queue.pop() {
+                        let event = formatter(
+                            &event.content,
+                            &event.meta.string,
+                            event.meta.color,
+                            event.strong
+                        );
+                        println!("{}", event);
+                    } else {
+                        tokio::task::yield_now().await
+                    }
+                }
+                None => break,
+            }
         }
     })
 }
 
 pub fn close() {
-    *LOGGER.lock().unwrap() = None;
+    *BUS.lock().unwrap() = None;
 }
 
-fn format_log_message(content: &str, level: &str, color: Color, strong: bool) -> String {
+
+/// Default formatter for [`init()`]
+/// 
+/// Example: `21:50:29 [I] : Hello, World!`
+/// 
+/// You may customize the formatter by implementing a `fn(content: &str, level: &str, color: Color, strong: bool) -> String` and pass it to [`init()`]
+pub fn default_formatter(content: &str, level: &str, color: Color, strong: bool) -> String {
 
     let mut result = String::new();
     let timestamp = chrono::Local::now().format("%H:%M:%S").to_string()
@@ -93,7 +142,7 @@ pub struct LogMeta {
     color: Color
 }
 
-pub struct LogMessage {
+pub struct LogEvent {
     meta: LogMeta,
     content: String,
     strong: bool
@@ -101,14 +150,21 @@ pub struct LogMessage {
 
 #[derive(Clone)]
 pub struct Logger {
-    sender: UnboundedSender<LogMessage>,
+    bus: Weak<EventBus<LogEvent>>,
     temporary_strong: bool
 }
 
 impl Logger {
     pub fn log(&mut self, meta: LogMeta, content: impl std::fmt::Display) {
         let content = format!("{}", content);
-        let _ = self.sender.send(LogMessage { meta, content, strong: self.temporary_strong });
+        if let Some(bus) = self.bus.upgrade() {
+            let event = LogEvent {
+                meta,
+                content,
+                strong: self.temporary_strong
+            };
+            bus.push(event);
+        }
         self.temporary_strong = false;
     }
 
@@ -170,7 +226,12 @@ impl Logger {
 
 /// This will panic if [`Logger`] was not initialized.
 pub fn get_logger() -> Logger {
-    LOGGER.lock().unwrap().as_ref()
-    .cloned()
-    .expect("Logger is not initialized")
+    Logger {
+        bus: Arc::downgrade(
+            BUS.lock().unwrap()
+            .as_ref()
+            .expect("Logger not initialized")
+        ),
+        temporary_strong: false
+    }
 }
