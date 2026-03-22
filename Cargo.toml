@@ -8,7 +8,11 @@ repository = "https://github.com/Falsw-star/li_logger"
 license = "MIT"
 
 [features]
+async = [
+    "tokio",
+]
 middleware = [
+    "async",
     "tower",
     "http",
     "pin-project",
@@ -21,5 +25,5 @@ crossbeam = { version = "0.8.4" }
 http = { version = "1.4.0", optional = true }
 lazy_static = "1.5.0"
 pin-project = { version = "1.1.11", optional = true }
-tokio = { version = "1.50.0", features = ["sync", "rt"] }
+tokio = { version = "1.50.0", features = ["rt"], optional = true }
 tower = { version = "0.5.3", optional = true }

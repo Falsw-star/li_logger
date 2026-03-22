@@ -1,8 +1,5 @@
 use std::sync::{Arc, Mutex, Weak};
-
 use colored::{self, Color, Colorize};
-use crossbeam::queue::ArrayQueue;
-use tokio::task::JoinHandle;
 
 lazy_static::lazy_static! {
     static ref BUS: Mutex<Option<Arc<EventBus<LogEvent>>>> = Mutex::new(None);
@@ -11,35 +8,24 @@ lazy_static::lazy_static! {
 #[cfg(feature = "middleware")]
 pub mod middleware;
 
+#[derive(Clone)]
 pub struct EventBus<E> {
-    queue: Arc<ArrayQueue<E>>
-}
-
-impl<E> Clone for EventBus<E> {
-    fn clone(&self) -> Self {
-        EventBus {
-            queue: self.queue.clone()
-        }
-    }
+    sender: crossbeam::channel::Sender<E>,
+    receiver: crossbeam::channel::Receiver<E>,
 }
 
 impl<E> EventBus<E> {
     pub fn new(cap: usize) -> Self {
-        Self {
-            queue: Arc::new(ArrayQueue::new(cap)),
-        }
+        let (sender, receiver) = crossbeam::channel::bounded(cap);
+        Self { sender, receiver }
     }
 
     pub fn push(&self, event: E) {
-        let _ = self.queue.push(event);
-    }
-
-    pub fn queue(&self) -> Arc<ArrayQueue<E>> {
-        self.queue.clone()
+        let _ = self.sender.send(event);
     }
 }
 
-/// The function creates a async logging thread. 
+/// The function creates a logging thread. 
 /// 
 /// The [`get_logger`] function will be usable after [`init`] is called.
 /// 
@@ -63,31 +49,87 @@ impl<E> EventBus<E> {
 ///     li_logger::close();
 ///     handle.await;
 /// }
+/// ``
+pub fn init(cap: usize, formatter: fn(content: &str, level: &str, color: Color, strong: bool) -> String) -> std::thread::JoinHandle<()> {
+    let bus = Arc::new(EventBus::<LogEvent>::new(cap));
+    let receiver = bus.receiver.clone();
+    BUS.lock().unwrap().replace(bus);
+
+    std::thread::spawn(move || {
+        loop {
+            match receiver.recv() {
+                Ok(event) => {
+                    let event = formatter(
+                        &event.content,
+                        &event.meta.string,
+                        event.meta.color,
+                        event.strong
+                    );
+                    println!("{}", event);
+                }
+                Err(_) => {
+                    break;
+                }
+            }
+        }
+    })
+}
+
+
+#[cfg(feature = "async")]
+/// The function creates a async logging thread. The only difference is that this uses [`tokio::spawn`] instead of [`std::thread::spawn`].
+/// 
+/// The [`get_logger`] function will be usable after [`init`] is called.
+/// 
+/// ### Close
+/// To close the logger thread, just call [`li_logger::close()`].
+/// 
+/// All [`Logger`] will not be usable after [`close`] is called.
+/// 
+/// ### Example
+/// ```rust
+/// use li_logger::default_formatter;
+/// 
+/// #[tokio::main]
+/// async fn main() {
+/// 
+///     let handle = li_logger::async_init(100, default_formatter);
+///     let mut logger = li_logger::get_logger();
+///     
+///     logger.success("Li Logger Started!");
+///     
+///     li_logger::close();
+///     handle.await;
+/// }
 /// ```
-pub fn init(cap: usize, formatter: fn(content: &str, level: &str, color: Color, strong: bool) -> String) -> JoinHandle<()> {
+pub fn async_init(cap: usize, formatter: fn(content: &str, level: &str, color: Color, strong: bool) -> String) -> tokio::task::JoinHandle<()> {
 
     
-    let bus = EventBus::<LogEvent>::new(cap);
-    let queue = Arc::downgrade(&bus.queue);
-    BUS.lock().unwrap().replace(Arc::new(bus));
+    let bus = Arc::new(EventBus::<LogEvent>::new(cap));
+    let receiver = bus.receiver.clone();
+    BUS.lock().unwrap().replace(bus);
 
     tokio::spawn(async move {
         loop {
-            match queue.upgrade() {
-                Some(queue) => {
-                    if let Some(event) = queue.pop() {
-                        let event = formatter(
-                            &event.content,
-                            &event.meta.string,
-                            event.meta.color,
-                            event.strong
-                        );
-                        println!("{}", event);
-                    } else {
-                        tokio::task::yield_now().await
-                    }
+            match tokio::task::spawn_blocking({
+                let receiver = receiver.clone();
+                move || receiver.recv()
+            }).await {
+                Ok(Ok(event)) => {
+                    let event = formatter(
+                        &event.content,
+                        &event.meta.string,
+                        event.meta.color,
+                        event.strong
+                    );
+                    println!("{}", event);
                 }
-                None => break,
+                Ok(Err(_)) => {
+                    break;
+                }
+                Err(_) => {
+                    break;
+                }
             }
         }
     })

@@ -1,4 +1,4 @@
-use std::{pin::Pin, sync::Arc, task::{Context, Poll}, time::Instant};
+use std::{pin::Pin, task::{Context, Poll}, time::Instant};
 
 use crate::EventBus;
 use http::{Request, Response};
@@ -36,19 +36,22 @@ use colored::{self, Color, Colorize};
 /// ```
 pub fn middleware(cap: usize, formatter: fn(&Event) -> String) -> (JoinHandle<()> ,EventLayer<Event>) {
     let bus = EventBus::<Event>::new(cap);
-    let queue = Arc::downgrade(&bus.queue);
+    let receiver = bus.receiver.clone();
     let handle =  tokio::spawn(async move {
         loop {
-            match queue.upgrade() {
-                Some(queue) => {
-                    if let Some(event) = queue.pop() {
-                        let event = formatter(&event);
-                        println!("{}", event);
-                    } else {
-                        tokio::task::yield_now().await
-                    }
+            match tokio::task::spawn_blocking({
+                let receiver = receiver.clone();
+                move || receiver.recv()
+            }).await {
+                Ok(Ok(event)) => {
+                    println!("{}", formatter(&event));
                 }
-                None => break,
+                Ok(Err(_)) => {
+                    break;
+                }
+                Err(_) => {
+                    break;
+                }
             }
         }
     });
@@ -73,6 +76,7 @@ pub fn default_formatter(event: &Event) -> String {
         .color(Color::BrightBlack);
     let color = match event.status.as_u16() {
         200..=299 => Color::Green,
+        300..=399 => Color::Blue,
         400..=499 => Color::Red,
         _ => Color::Magenta
     };
