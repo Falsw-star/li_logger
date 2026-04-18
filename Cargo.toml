@@ -1,6 +1,6 @@
 [package]
 name = "li_logger"
-version = "0.3.0"
+version = "0.3.1"
 description = "A self-use super-simple logging library."
 edition = "2024"
 authors = ["Falsw <Falsestar114514@outlook.com>"]
