@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex, Weak, atomic::Ordering};
-use colored::{self, Color, Colorize};
+pub use colored::{self, Color, Colorize};
 
 #[cfg(feature = "middleware")]
 pub mod middleware;
