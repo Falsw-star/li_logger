@@ -1,12 +1,29 @@
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, Weak, atomic::Ordering};
 use colored::{self, Color, Colorize};
+
+#[cfg(feature = "middleware")]
+pub mod middleware;
+
+pub mod config;
+
+use crate::config::{AtomicConfig, Config};
 
 lazy_static::lazy_static! {
     static ref BUS: Mutex<Option<Arc<EventBus<LogEvent>>>> = Mutex::new(None);
 }
 
-#[cfg(feature = "middleware")]
-pub mod middleware;
+lazy_static::lazy_static! {
+    static ref CONFIG: Arc<AtomicConfig> = Arc::new(AtomicConfig::default());
+}
+
+pub fn set_config(config: impl Into<Config>) {
+    let config = config.into();
+    CONFIG.info.store(config.info, Ordering::Relaxed);
+    CONFIG.warn.store(config.warn, Ordering::Relaxed);
+    CONFIG.error.store(config.error, Ordering::Relaxed);
+    CONFIG.debug.store(config.debug, Ordering::Relaxed);
+    CONFIG.success.store(config.success, Ordering::Relaxed);
+}
 
 #[derive(Clone)]
 pub struct EventBus<E> {
@@ -180,14 +197,14 @@ pub fn default_formatter(content: &str, level: &str, color: Color, strong: bool)
 }
 
 pub struct LogMeta {
-    string: String,
-    color: Color
+    pub string: String,
+    pub color: Color
 }
 
 pub struct LogEvent {
-    meta: LogMeta,
-    content: String,
-    strong: bool
+    pub meta: LogMeta,
+    pub content: String,
+    pub strong: bool
 }
 
 #[derive(Clone)]
@@ -211,6 +228,7 @@ impl Logger {
     }
 
     pub fn info(&mut self, content: impl std::fmt::Display) {
+        if !CONFIG.info.load(Ordering::Relaxed) { return; }
         self.log(
             LogMeta {
                 string: "I".to_string(),
@@ -221,6 +239,7 @@ impl Logger {
     }
 
     pub fn warn(&mut self, content: impl std::fmt::Display) {
+        if !CONFIG.warn.load(Ordering::Relaxed) { return; }
         self.log(
             LogMeta {
                 string: "W".to_string(),
@@ -231,6 +250,7 @@ impl Logger {
     }
 
     pub fn error(&mut self, content: impl std::fmt::Display) {
+        if !CONFIG.error.load(Ordering::Relaxed) { return; }
         self.log(
             LogMeta {
                 string: "E".to_string(),
@@ -241,6 +261,7 @@ impl Logger {
     }
 
     pub fn debug(&mut self, content: impl std::fmt::Display) {
+        if !CONFIG.debug.load(Ordering::Relaxed) { return; }
         self.log(
             LogMeta {
                 string: "D".to_string(),
@@ -251,6 +272,7 @@ impl Logger {
     }
 
     pub fn success(&mut self, content: impl std::fmt::Display) {
+        if !CONFIG.success.load(Ordering::Relaxed) { return; }
         self.log(
             LogMeta {
                 string: "S".to_string(),
